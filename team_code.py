@@ -53,9 +53,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
 
     columns = X.columns
     # Save the column names for later use during inference
-    print("About to write columns file")
     with open(os.path.join(model_folder, 'columns.txt'), 'w') as f:
-        print("Saving: {f"\n".join(columns)}")
         f.write("\n".join(columns))
     
     # Impute any missing features; use the mean value by default.    
@@ -188,7 +186,7 @@ def getColLists():
               'birthdetail_adm___6': 'Checked', 'momalive_adm': 'Yes', 'momageknown_adm': 'Yes', 'momagefirstpregknown_adm': 'Yes',
               'momhiv_adm': 'Positive', 'waterpure_adm': 'Yes', 'cookfuel_adm___1': 'Checked', 'cookfuel_adm___2': 'Checked',
               'cookfuel_adm___3': 'Checked', 'cookfuel_adm___4': 'Checked', 'cookfuel_adm___5': 'Checked', 'cookfuel_adm___6': 'Checked',
-              'cookfuel_adm___7': 'Checked', 'cookfuel_adm___8': 'Checked', 'hctpretransfusion_adm': 'Yes', 'hivstatus_adm': 'HIV positive', 
+              'cookfuel_adm___7': 'Checked', 'hctpretransfusion_adm': 'Yes', 'hivstatus_adm': 'HIV positive', 
               'malariastatuspos_adm': 'Yes'
     }
 

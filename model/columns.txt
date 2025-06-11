@@ -81,7 +81,6 @@ cookfuel_adm___4
 cookfuel_adm___5
 cookfuel_adm___6
 cookfuel_adm___7
-cookfuel_adm___8
 hctpretransfusion_adm
 hivstatus_adm
 malariastatuspos_adm

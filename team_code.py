@@ -53,7 +53,9 @@ def train_challenge_model(data_folder, model_folder, verbose):
 
     columns = X.columns
     # Save the column names for later use during inference
+    print("About to write columns file")
     with open(os.path.join(model_folder, 'columns.txt'), 'w') as f:
+        print("Saving: {f"\n".join(columns)}")
         f.write("\n".join(columns))
     
     # Impute any missing features; use the mean value by default.    

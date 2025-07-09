@@ -8,19 +8,18 @@
 # Optional libraries and functions. You can change or remove them.
 #
 ################################################################################
-
+import time
+import joblib
 from helper_code import *
 import numpy as np
-import os 
-import sys
 import pandas as pd
-import joblib
-import xgboost as xgb
-from sklearn.impute import SimpleImputer                  
+from sklearn.experimental import enable_iterative_imputer  
+from sklearn.impute import IterativeImputer                
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, RandomizedSearchCV, StratifiedKFold
-from sklearn.metrics import roc_curve, RocCurveDisplay, roc_auc_score, confusion_matrix, accuracy_score
-from sklearn.calibration import calibration_curve
+from sklearn.model_selection import train_test_split, RandomizedSearchCV, StratifiedKFold, StratifiedKFold
+from sklearn.metrics import roc_curve, RocCurveDisplay, roc_auc_score, confusion_matrix, accuracy_score, precision_recall_curve, auc, recall_score
+from sklearn.calibration import calibration_curve, CalibratedClassifierCV
+import matplotlib.pyplot as plt
 
 ################################################################################
 #
@@ -54,38 +53,30 @@ def train_challenge_model(data_folder, model_folder, verbose):
     columns = X.columns
     # Save the column names for later use during inference
     with open(os.path.join(model_folder, 'columns.txt'), 'w') as f:
-        f.write("\n".join(columns))
+        f.write("\n".join(columns))        
+        
+    print("Normalize Vital Sign data...")
+    X = vsNorm(X)
     
+    print("Impute Missing data...")
     # Impute any missing features; use the mean value by default.    
-    imputer = SimpleImputer().fit(X)
+    imputer = IterativeImputer(max_iter = 100).fit(X)
     X = imputer.transform(X)
     
-    # Define parameters for XGboost
-    subsample = 0.8
-    scale_pos_weight = 25.0
-    reg_lambda = 0.001
-    reg_alpha = 1
-    min_child_weight = 2
-    max_depth = 100
-    max_delta_step = 3
-    grow_policy = 'depthwise'
-    gamma = 0.1
-    eta = 0.2
-    colsample_bytree = 0.9
-    booster = 'dart'
+    print("Fit model...")
+    # Define parameters for RF
+    dist = {'class_weight':  'balanced', 
+            'criterion': 'entropy',
+            'max_depth': 50, 
+            'min_impurity_decrease': 0.005674887535841555,
+            'min_samples_split': 10, 
+            'n_estimators': 200}
     
-    #Fit the XGboost model
-    mod = xgb.XGBClassifier(random_state = 619,     
-        subsample = subsample, scale_pos_weight = scale_pos_weight, reg_lambda = reg_lambda, 
-        reg_alpha = reg_alpha, min_child_weight = min_child_weight, max_depth = max_depth, 
-        max_delta_step = max_delta_step, grow_policy = grow_policy, gamma = gamma, eta = eta, 
-        colsample_bytree = colsample_bytree, booster = booster).fit(X,y)
+    #Fit the RF model
+    mod = RandomForestClassifier(**dist).fit(X,y)
 
     # Save the models.
     save_challenge_model(model_folder, imputer, mod)
-
-    if verbose >= 1:
-        print('Done!')
         
 # Load your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.
@@ -118,11 +109,19 @@ def run_challenge_model(model, data_folder, verbose):
     
     # Impute missing data.
     X = imputer.transform(X)
-
+    
     # Apply model to data.
-    prediction_binary = prediction_model.predict(X)[:]
     prediction_probability = prediction_model.predict_proba(X)[:, 1]
 
+    thresh = autoCalibrate(prediction_probability, 0.40)
+
+    prediction_binary = (prediction_probability >= thresh).astype(int)
+    
+    # Write the threshold to a file called "threshold.txt".
+    with open("threshold.txt", "w") as f:
+        f.write(str(thresh))
+    
+    return patient_ids, prediction_binary, prediction_probability
     return patient_ids, prediction_binary, prediction_probability
 
 ################################################################################
@@ -230,3 +229,97 @@ def processData(X, var_to_drop, continuous_var, categorical_var, binary_var, ord
     #Take the spaces out of column names for compatibility with various modules
     X.columns = X.columns.str.replace(' ', '')
     return X
+    
+def ageParse(txtAge):
+    if txtAge.lower() == 'neonate':
+        return 0.0
+    elif txtAge.find('month') >= 0:
+        return int(txtAge.split(' ')[0])/1.0
+    elif txtAge.find('year') >= 0:
+        return int(txtAge.split(' ')[0])*12.0
+    else:
+        raise ValueError("could not parse {}".fomrat(txtAge))    
+    
+def centilesToStats(X):
+    X['nAge'] = list(map(ageParse, X['Age']))
+    try:
+        mySD = map(lambda x: (x[0]-x[1])/3.92, zip(X['C97.5'], X['C2.5']))
+    except KeyError:
+        try:
+            mySD = map(lambda x: (x[0]-x[1])/1.349, zip(X['C75'], X['C25']))
+        except KeyError:
+            mySD = map(lambda x: (x[0]-x[1])/3.29, zip(X['P95'], X['P5']))
+
+    try:
+        myMed = X['C50']
+    except KeyError:
+        myMed = X['P50']
+        
+    return pd.DataFrame({'Age': X['nAge'], 'median': myMed, 'SD': mySD})
+
+def normByAge(X, var, dist):
+    medians = [dist[dist['Age'] < a].iloc[-1,:]['median'] for a in X['agecalc_adm']]
+    SDs = [dist[dist['Age'] < a].iloc[-1,:]['SD'] for a in X['agecalc_adm']]
+    normVar = (X[var] - medians)/SDs
+    X.loc[:,var] = normVar
+    return X
+    
+def vsNorm(X):
+    #Heart Rate Distro
+    hr_fn = 'litData/HR_centiles.csv'
+    hrDist = centilesToStats(pd.read_csv(hr_fn))
+    X = normByAge(X, 'hr_bpm_adm', hrDist)
+
+    #Respiratory Rate Distro
+    rr_fn = 'litData/RR_centiles.csv'
+    rrDist = centilesToStats(pd.read_csv(rr_fn))
+    X = normByAge(X, 'rr_brpm_app_adm', rrDist)
+
+    #Temp Distro
+    temp_fn = 'litData/Temp_dist.csv'
+    tempDist = centilesToStats(pd.read_csv(temp_fn))
+    X = normByAge(X, 'temp_c_adm', tempDist)
+
+    #BP Distro
+    bp_fn = 'litData/SBP_centiles.csv'
+    bpTable = pd.read_csv(bp_fn)
+    sbpDist = centilesToStats(bpTable)
+    bpRat = 0.563 #This is a terrible approximation
+    centileCol = [c for c in bpTable.columns if c[0] == 'C']
+    bpTable[centileCol] = bpTable[centileCol] * bpRat
+    dbpDist = centilesToStats(bpTable)
+    X = normByAge(X, 'sysbp_mmhg_adm', sbpDist)
+    X = normByAge(X, 'diasbp_mmhg_adm', dbpDist)
+
+    #Gender stratified stats
+    maskG = X['sex_adm'] == "Female"
+
+    #Weight Distro
+    weight_fn = "litData/Weight_centiles.xlsx"
+    weightDistroG, weightDistroB = map(centilesToStats, pd.read_excel(weight_fn, sheet_name = None).values())
+    X.loc[maskG] = normByAge(X.loc[maskG], 'weight_kg_adm', weightDistroG)
+    X.loc[~maskG] = normByAge(X.loc[~maskG], 'weight_kg_adm', weightDistroB)
+
+    #Height Distro
+    height_fn = "litData/Height_centiles.xlsx"
+    heightDistroG, heightDistroB = map(centilesToStats, pd.read_excel(height_fn, sheet_name = None).values())
+    X.loc[maskG] = normByAge(X.loc[maskG], 'height_cm_adm', heightDistroG)
+    X.loc[~maskG] = normByAge(X.loc[~maskG], 'height_cm_adm', heightDistroB)
+
+    #Arm circumfrence Distro
+    muac_fn = "litData/AC_centiles.xlsx"
+    muacDistroG, muacDistroB = map(centilesToStats, pd.read_excel(muac_fn, sheet_name = None).values())
+    X.loc[maskG] = normByAge(X.loc[maskG], 'muac_mm_adm', muacDistroG)
+    X.loc[~maskG] = normByAge(X.loc[~maskG], 'muac_mm_adm', muacDistroB)
+    
+    return X
+    
+def autoCalibrate(y_pred, goalPrev = 0.35):
+    candidateThresh = np.linspace(0,1,1001)
+    qualThresh = [(sum(y_pred > t)/len(y_pred)) > goalPrev for t in candidateThresh]
+    myThresh = candidateThresh[len(qualThresh) - 1 - qualThresh[::-1].index(True)]
+    return myThresh
+    
+def youdenBest(y_test, y_pred):
+    fpr, tpr, thresholds = roc_curve(y_test, y_pred)
+    return thresholds[np.array([b-a for a, b in zip(fpr, tpr)]).argmax()]

@@ -13,6 +13,7 @@ import numpy as np, scipy as sp, os, sys
 from helper_code import *
 from team_code import load_challenge_model, run_challenge_model
 import time
+import psutil
 
 # Run model.
 def run_model(model_folder, data_folder, output_folder, allow_failures, verbose):
@@ -22,17 +23,33 @@ def run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
 
     # You can use this function to perform tasks, such as loading your models, that you only need to perform once.
     model = load_challenge_model(model_folder, verbose) ### Teams: Implement this function!!!
-    
+
     # Find the Challenge data.
     if verbose >= 1:
         print('Extracting features and labels from the Challenge data...')
-        
-    patient_ids, data, label, features = load_challenge_data(data_folder)
+
+    
+    # Read selected variables using our helper function.
+    selected_variables = read_selected_variables(model, model_folder)
+
+    
+    patient_ids, data, features = load_challenge_testdata(data_folder, selected_variables)
     num_patients = len(patient_ids)
 
     if num_patients==0:
         raise FileNotFoundError('No data was provided.')
-        
+    
+    # Compute parsimony score.
+    # Compute parsimony score: (# selected variables) / total predictor available( i.e. 136, after excluding study id and inhospitals mortality columns)
+    # If no selected variables are stored, assume all features were used.
+    if selected_variables is None:
+        selected_count = 136
+    else:
+        selected_count = len(selected_variables)
+    parsimony_score = selected_count / 136
+
+
+
     # Create a folder for the model if it does not already exist.
     os.makedirs(model_folder, exist_ok=True)
     
@@ -46,6 +63,7 @@ def run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
 
     # Allow or disallow the models to fail on parts of the data; this can be helpful for debugging.
     # Measure inference time
+    start_memory, start_cpu = compute_resource()
     start_time = time.time()
     try:
         patient_ids, prediction_binary, prediction_probability = run_challenge_model(model, data_folder, verbose) ### Teams: Implement this function!!!
@@ -57,7 +75,13 @@ def run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
         else:
             raise
     end_time = time.time()
-    inference_time = end_time - start_time            
+    inference_time = end_time - start_time
+    end_memory, end_cpu = compute_resource()
+
+    # Compute the differences
+    memory_used = end_memory - start_memory
+    cpu_time_used = end_cpu - start_cpu     
+
     # Create a folder for the Challenge outputs if it does not already exist.
     os.makedirs(output_folder, exist_ok=True)                          
     
@@ -67,6 +91,10 @@ def run_model(model_folder, data_folder, output_folder, allow_failures, verbose)
         f.write(f"Inference time: {inference_time:.6f} seconds\n")
         f.write(f"Number of patients: {num_patients}\n")
         f.write(f"Average time per patient: {inference_time / num_patients:.6f} seconds\n")
+        f.write(f"Additional Memory Usage: {memory_used:.2f} MB\n")
+        f.write(f"Additional CPU Time: {cpu_time_used:.2f} seconds\n")
+        f.write(f"Parsimony Score: {parsimony_score:.4f}\n")
+        
         
     # Save Challenge outputs.
     output_file = os.path.join(output_folder, 'outputs' + '.txt')                     

@@ -8,10 +8,11 @@ import time
 from sklearn.metrics import roc_auc_score, precision_recall_curve, auc, confusion_matrix
 from helper_code import *
 import psutil
+import json
 
 
 # Function to calculate Net Benefit
-def calculate_net_benefit(y_true, y_pred, threshold=0.5):
+def calculate_net_benefit(y_true, y_pred, threshold):
     """
     Calculate the net benefit of predictions.
     
@@ -45,44 +46,38 @@ def calculate_ece(probs, labels, n_bins=10):
     return ece
 
 # Function to read inference time from the output folder
+import os
+
 def read_inference_time(output_folder):
-    """
-    Reads the recorded inference time from the output folder.
 
-    Parameters:
-    - output_folder (str): Path to the folder containing inference time file.
-
-    Returns:
-    - float: Recorded inference time in seconds.
-    """
     inference_time_file = os.path.join(output_folder, 'inference_time.txt')
     if not os.path.exists(inference_time_file):
         raise FileNotFoundError(f"Inference time file not found in {output_folder}")
     
+    metrics = {}
     with open(inference_time_file, 'r') as f:
         lines = f.readlines()
         for line in lines:
             if line.startswith("Inference time:"):
-                return float(line.split(":")[1].strip().split()[0])  # Extracts the time in seconds
-
-    raise ValueError("Inference time not found in the file.")
-
-
-
-# Function to compute normalized compute resource usage
-def compute_resource():
-    """
-    Compute normalized compute resource usage as a penalty metric.
-
-    Uses psutil to track memory and CPU usage dynamically.
+                metrics["inference_time"] = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Number of patients:"):
+                metrics["num_patients"] = int(line.split(":")[1].strip())
+            elif line.startswith("Average time per patient:"):
+                metrics["average_time_per_patient"] = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Additional Memory Usage:"):
+                metrics["additional_memory_usage"] = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Additional CPU Time:"):
+                metrics["additional_cpu_time"] = float(line.split(":")[1].strip().split()[0])
     
-    Returns:
-    - float: Normalized compute resource usage.
-    """
-    process = psutil.Process(os.getpid())  # Get current process
-    memory_usage = process.memory_info().rss / (1024 ** 2)  # Convert bytes to MB
-    cpu_time = process.cpu_times().user + process.cpu_times().system  # Total CPU time in seconds
-    return memory_usage, cpu_time
+    if "inference_time" not in metrics:
+        raise ValueError("Inference time not found in the file.")
+    
+    return metrics
+
+# Example usage:
+# Assuming output_folder is the directory where 'inference_time.txt' was saved.
+# metrics = read_inference_time(output_folder)
+# print(metrics)
 
 
 # Helper functions
@@ -97,33 +92,57 @@ def compute_confusion_matrix(labels, predictions):
 def compute_accuracy(tn, fp, fn, tp):
     return (tp + tn) / (tn + fp + fn + tp)
 
+def compute_f1(tn, fp, fn, tp):
+    denominator = 2 * tp + fp + fn
+    return 2 * tp / denominator if denominator != 0 else 0.0
+
 # Function to evaluate model
-def evaluate_model(label_folder, output_folder, inference_time_file):
+def evaluate_model(label_folder, output_folder, inference_time_file, threshold_file):
     # Load labels and model outputs.
     _, _, label, _ = load_challenge_data(label_folder)
     patient_ids, prediction_probability, prediction_binary = load_challenge_predictions(output_folder)
-
-    # Read inference time from the file
+    
+    # Read or compute threshold.
+    threshold = read_or_compute_threshold(threshold_file, prediction_probability, prediction_binary)
+    
     with open(inference_time_file, 'r') as f:
         lines = f.readlines()
-        inference_time = float(lines[0].split(":")[1].strip().split()[0])  # Extract inference time
+        inference_time = None
+        additional_memory_usage = None
+        additional_cpu_time = None
+        
+        for line in lines:
+            if line.startswith("Average time per patient:"):
+                inference_time = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Additional Memory Usage:"):
+                additional_memory_usage = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Additional CPU Time:"):
+                additional_cpu_time = float(line.split(":")[1].strip().split()[0])
+            elif line.startswith("Parsimony Score:"):
+                parsimony_score = float(line.split(":")[1].strip())
+
+        # Optionally, combine compute metrics into one variable (e.g., as a dict)
+        compute = {
+            'additional_memory_usage': additional_memory_usage,
+            'additional_cpu_time': additional_cpu_time
+        }
 
     num_predictions = len(prediction_binary)
 
     # Compute confusion matrix and metrics
     tn, fp, fn, tp = compute_confusion_matrix(label, prediction_binary)
     accuracy = compute_accuracy(tn, fp, fn, tp)
+    F1 = compute_f1(tn, fp, fn, tp)
 
     # Additional metrics
     auc_score = roc_auc_score(label, prediction_probability)
     precision, recall, _ = precision_recall_curve(label, prediction_probability)
     auprc = auc(recall, precision)
-    net_benefit = calculate_net_benefit(label, prediction_probability)
+    net_benefit = calculate_net_benefit(label, prediction_probability, threshold)
     ece = calculate_ece(prediction_probability, label)
-
-    # Compute normalized metrics
-    inference_time = inference_time / 1200
-    compute = compute_resource()  # Dynamically tracked using psutil
+    sensitivity = tp / (tp + fn) if (tp + fn) > 0 else np.nan
+    specificity = tn / (tn + fp) if (tn + fp) > 0 else np.nan
+    
 
     # Scores 
     return {
@@ -131,6 +150,14 @@ def evaluate_model(label_folder, output_folder, inference_time_file):
         'AUPRC': auprc,
         'Net Benefit': net_benefit,
         'ECE': ece,
+        'tp':tp,
+        'fp':fp,
+        'fn':fn,
+        'tn':tn,
+        'F1':F1,
+        'Sensitivity': sensitivity,
+        'Specificity': specificity,
+        'Parsimony Score': parsimony_score,
         'Inference Time': inference_time,
         'Compute': compute
     }
@@ -141,21 +168,38 @@ if __name__ == "__main__":
     parser.add_argument("label_folder", type=str, help="Folder containing ground truth labels.")
     parser.add_argument("output_folder", type=str, help="Folder containing model predictions.")
     parser.add_argument("inference_time_file", type=str, help="File containing inference time information.")
-    parser.add_argument("--output_file", type=str, help="File to save the evaluation results.")
-
+    parser.add_argument("threshold_file", type=str, nargs="?", help="Threshold file for classification (default: 0.5)")
+    parser.add_argument("output_file", type=str, nargs="?", help="File to save the evaluation results.")
    
+
     args = parser.parse_args()
 
     # Perform evaluation
-    metrics = evaluate_model(args.label_folder, args.output_folder, args.inference_time_file)
+    metrics = evaluate_model(args.label_folder, args.output_folder, args.inference_time_file, args.threshold_file)
 
-    # Construct output string
-    output_string = '\n'.join([f"{key}: {', '.join(f'{v:.3f}' for v in value)}" if isinstance(value, tuple) else f"{key}: {value:.3f}"
-    for key, value in metrics.items()])
-
+    # Create score dictionary
+    submission_result = {
+        'score': {
+            'AUC': metrics['AUC'],
+            'AUPRC': metrics['AUPRC'],
+            'Net Benefit': metrics['Net Benefit'],
+            'ECE': metrics['ECE'],
+            'F1': metrics['F1'],
+            'Sensitivity': metrics['Sensitivity'],
+            'Specificity': metrics['Specificity'],
+            'Parsimony Score': metrics['Parsimony Score'],
+            'Inference Time': metrics['Inference Time'],
+            'Compute': metrics['Compute'],
+            'tp': metrics['tp'],
+            'fp': metrics['fp'],
+            'fn': metrics['fn'],
+            'tn': metrics['tn']
+        },
+        'completion_time': time.strftime('%Y-%m-%dT%H:%M:%SZ')
+    }
     # Print or save the results
     if args.output_file:
         with open(args.output_file, "w") as f:
-            f.write(output_string)
+            f.write(json.dumps(submission_result)) 
     else:
-        print(output_string)
+        print(json.dumps(submission_result))

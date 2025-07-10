@@ -86,7 +86,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
 
     mod = MLPClassifier(**dist).fit(X,y)"""
 
-    mod = CalibratedClassifierCV(mod, method = 'isotonic', cv = 5).fit(X, y)
+    mod = CalibratedClassifierCV(mod, method = 'sigmoid', cv = 5).fit(X, y)
 
     # Save the models.
     save_challenge_model(model_folder, imputer, mod)

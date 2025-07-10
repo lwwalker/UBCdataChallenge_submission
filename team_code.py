@@ -16,6 +16,7 @@ import pandas as pd
 from sklearn.experimental import enable_iterative_imputer  
 from sklearn.impute import IterativeImputer                
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.neural_network import MLPClassifier
 from sklearn.model_selection import train_test_split, RandomizedSearchCV, StratifiedKFold, StratifiedKFold
 from sklearn.metrics import roc_curve, RocCurveDisplay, roc_auc_score, confusion_matrix, accuracy_score, precision_recall_curve, auc, recall_score
 from sklearn.calibration import calibration_curve, CalibratedClassifierCV
@@ -74,6 +75,18 @@ def train_challenge_model(data_folder, model_folder, verbose):
     
     #Fit the RF model
     mod = RandomForestClassifier(**dist).fit(X,y)
+    
+    #Define parameters for NN
+    """dist = {'alpha': 1.0, 
+            'batch_size': 32, 
+            'learning_rate': 'invscaling',
+            'learning_rate_init': 0.03162277660168379, 
+            'max_iter': 10000,
+            'solver': 'sgd'}
+
+    mod = MLPClassifier(**dist).fit(X,y)"""
+
+    mod = CalibratedClassifierCV(mod, method = 'isotonic', cv = 5).fit(X, y)
 
     # Save the models.
     save_challenge_model(model_folder, imputer, mod)

@@ -93,7 +93,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
 
     mod = MLPClassifier(**dist).fit(X,y)
 
-    #mod = CalibratedClassifierCV(mod, method = 'sigmoid', cv = 5).fit(X, y)
+    mod = CalibratedClassifierCV(mod, method = 'isotonic', cv = 5).fit(X, y)
 
     # Save the models.
     save_challenge_model(model_folder, imputer, scaler, mod)
@@ -137,11 +137,11 @@ def run_challenge_model(model, data_folder, verbose):
     # Apply model to data.
     prediction_probability = prediction_model.predict_proba(X)[:, 1]
 
-    scParams = {'top': 0.05210420841683,
+    """scParams = {'top': 0.05210420841683,
             'mid': 0.557752378504504,
             'topprev': 0.4417835671342685,
             'midprev': 0.11202585531785011}
-    prediction_probability = segmentalCalibration(prediction_probability, **scParams)
+    prediction_probability = segmentalCalibration(prediction_probability, **scParams)"""
 
     thresh = autoThresh(prediction_probability, 0.35)
 

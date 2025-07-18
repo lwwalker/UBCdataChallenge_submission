@@ -93,7 +93,7 @@ def load_challenge_predictions(folder):
         header = f.readline().strip()
         column_names = header.split('|')
         predictions = np.genfromtxt(f, delimiter='|')
-    
+    print(predictions)
     patient_ids = predictions[:,0].astype(int)
     prediction_probability = predictions[:,1]
     prediction_binary = predictions[:,2].astype(int)

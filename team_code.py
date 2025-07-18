@@ -10,10 +10,12 @@
 ################################################################################
 import time
 import joblib
+import copy
 from helper_code import *
 import numpy as np
 import pandas as pd
-from sklearn.experimental import enable_iterative_imputer  
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.preprocessing import StandardScaler    
 from sklearn.impute import IterativeImputer                
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neural_network import MLPClassifier
@@ -64,32 +66,37 @@ def train_challenge_model(data_folder, model_folder, verbose):
     imputer = IterativeImputer(max_iter = 100).fit(X)
     X = imputer.transform(X)
     
+    print("Scale dataset")
+    scaler = StandardScaler()
+    scaler.fit(X)
+    X = scaler.transform(X)
+
     print("Fit model...")
     # Define parameters for RF
-    dist = {'class_weight':  'balanced', 
+    """dist = {'class_weight':  'balanced', 
             'criterion': 'entropy',
             'max_depth': 50, 
             'min_impurity_decrease': 0.005674887535841555,
             'min_samples_split': 10, 
-            'n_estimators': 200}
+            'n_estimators': 200}"""
     
     #Fit the RF model
-    mod = RandomForestClassifier(**dist).fit(X,y)
+    #mod = RandomForestClassifier(**dist).fit(X,y)
     
     #Define parameters for NN
-    """dist = {'alpha': 1.0, 
+    dist = {'alpha': 1.0, 
             'batch_size': 32, 
             'learning_rate': 'invscaling',
             'learning_rate_init': 0.03162277660168379, 
             'max_iter': 10000,
             'solver': 'sgd'}
 
-    mod = MLPClassifier(**dist).fit(X,y)"""
+    mod = MLPClassifier(**dist).fit(X,y)
 
-    mod = CalibratedClassifierCV(mod, method = 'sigmoid', cv = 5).fit(X, y)
+    #mod = CalibratedClassifierCV(mod, method = 'sigmoid', cv = 5).fit(X, y)
 
     # Save the models.
-    save_challenge_model(model_folder, imputer, mod)
+    save_challenge_model(model_folder, imputer, scaler, mod)
         
 # Load your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.
@@ -107,6 +114,7 @@ def load_challenge_model(model_folder, verbose):
 
 def run_challenge_model(model, data_folder, verbose):
     imputer = model['imputer']
+    scaler = model['scaler']
     prediction_model = model['prediction_model']
     columns = model['columns']
 
@@ -121,12 +129,21 @@ def run_challenge_model(model, data_folder, verbose):
     X = X.reindex(columns=columns, fill_value=0)
     
     # Impute missing data.
+    print("Imupting ...")
     X = imputer.transform(X)
+    print("Scaling ...")
+    X = scaler.transform(X)
     
     # Apply model to data.
     prediction_probability = prediction_model.predict_proba(X)[:, 1]
 
-    thresh = autoCalibrate(prediction_probability, 0.40)
+    scParams = {'top': 0.05210420841683,
+            'mid': 0.557752378504504,
+            'topprev': 0.4417835671342685,
+            'midprev': 0.11202585531785011}
+    prediction_probability = segmentalCalibration(prediction_probability, **scParams)
+
+    thresh = autoThresh(prediction_probability, 0.35)
 
     prediction_binary = (prediction_probability >= thresh).astype(int)
     
@@ -134,7 +151,6 @@ def run_challenge_model(model, data_folder, verbose):
     with open("threshold.txt", "w") as f:
         f.write(str(thresh))
     
-    return patient_ids, prediction_binary, prediction_probability
     return patient_ids, prediction_binary, prediction_probability
 
 ################################################################################
@@ -144,8 +160,8 @@ def run_challenge_model(model, data_folder, verbose):
 ################################################################################
 
 # Save your trained model.
-def save_challenge_model(model_folder, imputer, prediction_model):
-    d = {'imputer': imputer, 'prediction_model': prediction_model}
+def save_challenge_model(model_folder, imputer, scaler, prediction_model):
+    d = {'imputer': imputer, 'scaler': scaler, 'prediction_model': prediction_model}
     filename = os.path.join(model_folder, 'model.sav')
     joblib.dump(d, filename, protocol=0)
 
@@ -327,7 +343,7 @@ def vsNorm(X):
     
     return X
     
-def autoCalibrate(y_pred, goalPrev = 0.35):
+def autoThresh(y_pred, goalPrev = 0.35):
     candidateThresh = np.linspace(0,1,1001)
     qualThresh = [(sum(y_pred > t)/len(y_pred)) > goalPrev for t in candidateThresh]
     myThresh = candidateThresh[len(qualThresh) - 1 - qualThresh[::-1].index(True)]
@@ -336,3 +352,17 @@ def autoCalibrate(y_pred, goalPrev = 0.35):
 def youdenBest(y_test, y_pred):
     fpr, tpr, thresholds = roc_curve(y_test, y_pred)
     return thresholds[np.array([b-a for a, b in zip(fpr, tpr)]).argmax()]
+
+def segmentalCalibration(p, top = 0.3, mid = 0.15, topprev = 0.25, midprev = 0.15):
+    p = copy.copy(p)
+    flatten_mask = p > (top - 0.01)
+    mid_mask = p >= mid
+    bottom_mask = p < mid
+    try:
+        p[flatten_mask] = (p[flatten_mask] - (top - 0.01))/(max(p[flatten_mask]) - (top - 0.01))*0.01 + (top - 0.01)
+    except ValueError:
+        pass
+        #print("No values to flatten")        
+    p[mid_mask] = (p[mid_mask] - mid)/(top-mid)*(topprev - midprev) + mid    
+    p[bottom_mask] = p[bottom_mask]/mid*midprev
+    return p
